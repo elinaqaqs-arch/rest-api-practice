@@ -47,13 +47,6 @@ def update_state(mutator):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def find_product(state: dict, product_id: int) -> dict | None:
-    index = product_index(state, product_id)
-    if index is None:
-        return None
-    return state["items"][index]
-
-
 def product_index(state: dict, product_id: int) -> int | None:
     for index, item in enumerate(state["items"]):
         if item["id"] == product_id:

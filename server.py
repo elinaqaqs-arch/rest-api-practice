@@ -11,12 +11,12 @@ import json
 import re
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from auth import MENTOR_TOKEN, STUDENT_TOKEN, require_user
 from errors import ApiError
-from store import assert_unique_name, load_state, product_index, update_state
-from validation import validate_product
+from store import assert_unique_name, load_state, product_index, seed_state, update_state
+from validation import validate_product, validate_product_query
 
 HOST = "127.0.0.1"
 PORT = 8080
@@ -60,7 +60,9 @@ class Handler(BaseHTTPRequestHandler):
             )
 
     def route(self, method: str) -> None:
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        self.query = parse_qs(parsed.query, keep_blank_values=True)
 
         if method == "OPTIONS":
             self.respond(204, None, {"Allow": "GET, POST, PUT, PATCH, DELETE, OPTIONS"})
@@ -78,14 +80,35 @@ class Handler(BaseHTTPRequestHandler):
                             "mentor": MENTOR_TOKEN,
                         },
                         "auth_header": "Authorization: Bearer <token>",
+                        "product_rules": {
+                            "name": "строка от 2 до 40 символов, уникальная без учета регистра",
+                            "price": "целое число от 0 до 10000",
+                            "stock": "целое число от 0 до 100",
+                        },
                         "endpoints": [
                             "GET /health",
+                            "GET /echo",
                             "GET /products",
                             "GET /products/{id}",
                             "POST /products",
                             "PUT /products/{id}",
                             "PATCH /products/{id}",
                             "DELETE /products/{id}",
+                            "POST /reset",
+                            "GET /demo/server-error",
+                        ],
+                        "practice": [
+                            "GET /health и посмотри код и тело ответа.",
+                            "GET /echo с заголовком X-Request-Id: demo-1. Тот же id вернется в ответе.",
+                            "GET /products и GET /products/1.",
+                            "GET /products/999 ожидает 404. GET /products/abc ожидает 400.",
+                            "GET /products?limit=20 работает. limit=0 и limit=21 ожидают 422.",
+                            "POST /products без Authorization ожидает 401. С токеном student-token и верным JSON ожидает 201.",
+                            "Повтори то же name: ожидается 409. Name из 1 символа и из 41 символа ожидают 422.",
+                            "POST без Content-Type: application/json ожидает 415. Пустое или сломанное тело ожидает 400.",
+                            "PATCH /products/1 меняет только price. PUT без одного из полей ожидает 422.",
+                            "DELETE /products/1 с student-token ожидает 403. С mentor-token ожидает 204.",
+                            "GET /demo/server-error ожидает 500. POST /reset возвращает начальные товары.",
                         ],
                     }
                 },
@@ -95,6 +118,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health" and method == "GET":
             self.respond(200, {"data": {"status": "ok", "service": "rest-practice"}})
             return
+
+        if path == "/echo":
+            self.show_echo(method, path)
+            return
+
+        if path == "/reset" and method == "POST":
+            self.reset_products()
+            return
+
+        if path == "/demo/server-error" and method == "GET":
+            raise ApiError(
+                500,
+                "server_error",
+                "Учебная ошибка сервера. Процесс не упал: этот маршрут всегда отвечает 500.",
+            )
 
         if path == "/products" and method == "GET":
             self.list_products()
@@ -109,8 +147,11 @@ class Handler(BaseHTTPRequestHandler):
             self.route_one_product(method, product_match.group(1))
             return
 
-        if path in {"/", "/health"}:
+        if path in {"/", "/health", "/demo/server-error"}:
             self.method_not_allowed("GET")
+
+        if path == "/reset":
+            self.method_not_allowed("POST")
 
         if path == "/products":
             self.method_not_allowed("GET, POST")
@@ -118,8 +159,17 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "not_found", "Маршрут не найден.")
 
     def list_products(self) -> None:
+        filters = validate_product_query(self.query)
         state = load_state()
         items = sorted(state["items"], key=lambda item: item["id"])
+
+        if filters["min_price"] is not None:
+            items = [item for item in items if item["price"] >= filters["min_price"]]
+        if filters["max_price"] is not None:
+            items = [item for item in items if item["price"] <= filters["max_price"]]
+        if filters["limit"] is not None:
+            items = items[: filters["limit"]]
+
         self.respond(
             200,
             {
@@ -127,6 +177,32 @@ class Handler(BaseHTTPRequestHandler):
                 "meta": {"count": len(items), "total": len(state["items"])},
             },
         )
+
+    def show_echo(self, method: str, path: str) -> None:
+        raw = self.read_raw_body()
+        query = {key: values[0] if len(values) == 1 else values for key, values in self.query.items()}
+        self.respond(
+            200,
+            {
+                "data": {
+                    "method": method,
+                    "path": path,
+                    "query": query,
+                    "headers": {key: value for key, value in self.headers.items()},
+                    "body": raw.decode("utf-8", errors="replace") if raw else None,
+                }
+            },
+        )
+
+    def reset_products(self) -> None:
+        state = seed_state()
+
+        def mutate(current: dict) -> None:
+            current.clear()
+            current.update(state)
+
+        update_state(mutate)
+        self.respond(200, {"data": state["items"], "meta": {"count": len(state["items"])}})
 
     def route_one_product(self, method: str, raw_id: str) -> None:
         product_id = self.parse_product_id(raw_id)
@@ -227,13 +303,7 @@ class Handler(BaseHTTPRequestHandler):
                 "Заголовок Content-Type должен быть application/json.",
             )
 
-        length_header = self.headers.get("Content-Length", "0")
-        try:
-            length = int(length_header)
-        except ValueError:
-            length = 0
-
-        raw = self.rfile.read(length) if length > 0 else b""
+        raw = self.read_raw_body()
         if not raw.strip():
             raise ApiError(400, "bad_request", "Тело запроса пустое. Ожидается JSON-объект.")
 
@@ -246,6 +316,16 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "bad_request", 'JSON должен быть объектом, например {"name": "Pen"}.')
 
         return decoded
+
+    def read_raw_body(self) -> bytes:
+        length_header = self.headers.get("Content-Length", "0")
+        try:
+            length = int(length_header)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return b""
+        return self.rfile.read(length)
 
     def parse_product_id(self, raw_id: str) -> int:
         if re.fullmatch(r"[1-9]\d{0,8}", raw_id) is None:
