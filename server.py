@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from errors import ApiError
+from store import find_product, load_state
 
 HOST = "127.0.0.1"
 PORT = 8080
@@ -70,7 +71,11 @@ class Handler(BaseHTTPRequestHandler):
                     "data": {
                         "name": "REST practice API",
                         "base_url": f"http://{HOST}:{PORT}",
-                        "endpoints": ["GET /health"],
+                        "endpoints": [
+                            "GET /health",
+                            "GET /products",
+                            "GET /products/{id}",
+                        ],
                     }
                 },
             )
@@ -80,7 +85,16 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, {"data": {"status": "ok", "service": "rest-practice"}})
             return
 
-        if path in {"/", "/health"}:
+        if path == "/products" and method == "GET":
+            self.list_products()
+            return
+
+        product_match = re.fullmatch(r"/products/([^/]+)", path)
+        if product_match:
+            self.show_product_route(method, product_match.group(1))
+            return
+
+        if path in {"/", "/health", "/products"}:
             raise ApiError(
                 405,
                 "method_not_allowed",
@@ -89,6 +103,39 @@ class Handler(BaseHTTPRequestHandler):
             )
 
         raise ApiError(404, "not_found", "Маршрут не найден.")
+
+    def list_products(self) -> None:
+        state = load_state()
+        items = sorted(state["items"], key=lambda item: item["id"])
+        self.respond(
+            200,
+            {
+                "data": items,
+                "meta": {"count": len(items), "total": len(state["items"])},
+            },
+        )
+
+    def show_product_route(self, method: str, raw_id: str) -> None:
+        if method != "GET":
+            raise ApiError(
+                405,
+                "method_not_allowed",
+                "Этот метод для этого маршрута не поддерживается.",
+                headers={"Allow": "GET"},
+            )
+
+        self.respond(200, {"data": self.product_or_404(self.parse_product_id(raw_id))})
+
+    def parse_product_id(self, raw_id: str) -> int:
+        if re.fullmatch(r"[1-9]\d{0,8}", raw_id) is None:
+            raise ApiError(400, "bad_request", "Id товара должен быть целым числом больше 0.")
+        return int(raw_id)
+
+    def product_or_404(self, product_id: int) -> dict:
+        product = find_product(load_state(), product_id)
+        if product is None:
+            raise ApiError(404, "not_found", "Товар не найден.")
+        return product
 
     def respond(self, status: int, body: dict | None, extra_headers: dict[str, str] | None = None) -> None:
         payload = b""
