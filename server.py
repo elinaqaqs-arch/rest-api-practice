@@ -11,6 +11,7 @@ import json
 import re
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from auth import MENTOR_TOKEN, STUDENT_TOKEN, require_user
@@ -20,6 +21,11 @@ from validation import validate_product, validate_product_query
 
 HOST = "127.0.0.1"
 PORT = 8080
+ROOT = Path(__file__).resolve().parent
+STATIC_FILES = {
+    "/static/swagger-ui.css": ("swagger-ui.css", "text/css; charset=utf-8"),
+    "/static/swagger-ui-bundle.js": ("swagger-ui-bundle.js", "text/javascript; charset=utf-8"),
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,6 +92,8 @@ class Handler(BaseHTTPRequestHandler):
                             "stock": "целое число от 0 до 100",
                         },
                         "endpoints": [
+                            "GET /docs",
+                            "GET /openapi.yaml",
                             "GET /health",
                             "GET /echo",
                             "GET /products",
@@ -113,6 +121,19 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 },
             )
+            return
+
+        if path == "/docs" and method == "GET":
+            self.respond_bytes((ROOT / "docs.html").read_bytes(), "text/html; charset=utf-8")
+            return
+
+        if path == "/openapi.yaml" and method == "GET":
+            self.respond_bytes((ROOT / "openapi.yaml").read_bytes(), "application/yaml; charset=utf-8")
+            return
+
+        if path in STATIC_FILES and method == "GET":
+            filename, content_type = STATIC_FILES[path]
+            self.respond_bytes((ROOT / "static" / filename).read_bytes(), content_type)
             return
 
         if path == "/health" and method == "GET":
@@ -147,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
             self.route_one_product(method, product_match.group(1))
             return
 
-        if path in {"/", "/health", "/demo/server-error"}:
+        if path in {"/", "/health", "/demo/server-error", "/docs", "/openapi.yaml"} or path in STATIC_FILES:
             self.method_not_allowed("GET")
 
         if path == "/reset":
@@ -371,6 +392,14 @@ class Handler(BaseHTTPRequestHandler):
         if payload:
             self.wfile.write(payload)
 
+    def respond_bytes(self, payload: bytes, content_type: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def request_id(self) -> str:
         if hasattr(self, "_request_id"):
             return self._request_id
@@ -387,6 +416,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Сервер: http://{HOST}:{PORT}")
+    print(f"Swagger: http://{HOST}:{PORT}/docs")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

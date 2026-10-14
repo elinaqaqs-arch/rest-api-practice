@@ -1,0 +1,487 @@
+openapi: 3.0.3
+info:
+  title: REST API для тренировки
+  version: "1.0.0"
+  description: |
+    Локальный сервер для тренировки запросов: методы, коды ответов, заголовки, тело, границы полей и права доступа.
+
+    В кнопке Authorize вставь токен без слова Bearer.
+
+    - student-token создает и меняет товары
+    - mentor-token делает то же и еще удаляет
+servers:
+  - url: http://127.0.0.1:8080
+tags:
+  - name: Служебные
+    description: Проверка сервера, эхо запроса и сброс данных
+  - name: Товары
+    description: Учебный ресурс product
+paths:
+  /health:
+    get:
+      tags: [Служебные]
+      operationId: getHealth
+      summary: Проверка, что сервер жив
+      responses:
+        "200":
+          description: Сервер работает
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: ok
+                      service:
+                        type: string
+                        example: rest-practice
+  /echo:
+    get:
+      tags: [Служебные]
+      operationId: echoRequest
+      summary: Показать, что сервер получил
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Метод, путь, query, заголовки и тело запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Echo"
+    post:
+      tags: [Служебные]
+      operationId: echoPost
+      summary: Показать POST так, как его увидел сервер
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            example:
+              note: hello
+      responses:
+        "200":
+          description: Принятый запрос
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Echo"
+  /reset:
+    post:
+      tags: [Служебные]
+      operationId: resetProducts
+      summary: Вернуть стартовые товары
+      responses:
+        "200":
+          description: Снова Notebook, Pen и Lamp
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductList"
+  /demo/server-error:
+    get:
+      tags: [Служебные]
+      operationId: demoServerError
+      summary: Учебная ошибка 500
+      description: Процесс сервера не падает. Этот маршрут всегда отвечает 500.
+      responses:
+        "500":
+          description: Учебная ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /products:
+    get:
+      tags: [Товары]
+      operationId: listProducts
+      summary: Список товаров
+      parameters:
+        - name: min_price
+          in: query
+          required: false
+          description: Целое число от 0 до 10000
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+        - name: max_price
+          in: query
+          required: false
+          description: Целое число от 0 до 10000. Не меньше min_price.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+        - name: limit
+          in: query
+          required: false
+          description: Сколько товаров вернуть. От 1 до 20. 0 и 21 дают 422.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+      responses:
+        "200":
+          description: Список товаров
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductList"
+        "422":
+          description: Неверные query-параметры
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Товары]
+      operationId: createProduct
+      summary: Создать товар
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductWrite"
+            example:
+              name: Cup
+              price: 5
+              stock: 1
+      responses:
+        "201":
+          description: Товар создан
+          headers:
+            Location:
+              description: Адрес нового товара
+              schema:
+                type: string
+                example: http://127.0.0.1:8080/products/4
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEnvelope"
+        "400":
+          description: Пустое или сломанное тело, либо JSON не объект
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Нет заголовка Authorization или token неизвестен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Товар с таким названием уже есть
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "415":
+          description: Content-Type не application/json
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Поля не прошли проверку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /products/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Целое число больше 0. abc и 01 дают 400, неизвестный id дает 404.
+        schema:
+          type: integer
+          minimum: 1
+          example: 1
+    get:
+      tags: [Товары]
+      operationId: getProduct
+      summary: Один товар
+      responses:
+        "200":
+          description: Товар найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEnvelope"
+        "400":
+          description: Id не является целым числом больше 0
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [Товары]
+      operationId: replaceProduct
+      summary: Заменить все поля товара
+      description: Нужны name, price и stock. Если одного поля нет, ответ 422.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductWrite"
+            example:
+              name: Notebook
+              price: 12
+              stock: 5
+      responses:
+        "200":
+          description: Товар заменен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEnvelope"
+        "401":
+          description: Нет доступа
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Название уже занято
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Не хватает поля или значение вне границы
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      tags: [Товары]
+      operationId: updateProduct
+      summary: Изменить часть полей
+      description: Достаточно одного поля. Пустой объект {} дает 422.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductPatch"
+            example:
+              price: 11
+      responses:
+        "200":
+          description: Товар изменен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEnvelope"
+        "401":
+          description: Нет доступа
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Название уже занято
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Поля не прошли проверку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Товары]
+      operationId: deleteProduct
+      summary: Удалить товар
+      description: student получает 403. Без токена будет 401. mentor получает 204.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Товар удален, тела нет
+        "401":
+          description: Нет токена или token неизвестен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Роль student не может удалять
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Вставь student-token или mentor-token. Слово Bearer писать не нужно.
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Если передать demo-1, тот же id вернется в ответе.
+      schema:
+        type: string
+        example: demo-1
+  schemas:
+    Product:
+      type: object
+      required: [id, name, price, stock]
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          minLength: 2
+          maxLength: 40
+          example: Notebook
+        price:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          example: 10
+        stock:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 5
+    ProductWrite:
+      type: object
+      required: [name, price, stock]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 40
+        price:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        stock:
+          type: integer
+          minimum: 0
+          maximum: 100
+    ProductPatch:
+      type: object
+      description: Хотя бы одно поле.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 40
+        price:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        stock:
+          type: integer
+          minimum: 0
+          maximum: 100
+    ProductEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Product"
+    ProductList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        meta:
+          type: object
+          properties:
+            count:
+              type: integer
+            total:
+              type: integer
+    Echo:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            method:
+              type: string
+            path:
+              type: string
+            query:
+              type: object
+              additionalProperties: true
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+            body:
+              nullable: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: validation_error
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
