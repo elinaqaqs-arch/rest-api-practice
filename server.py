@@ -13,6 +13,7 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+from auth import MENTOR_TOKEN, STUDENT_TOKEN, require_user
 from errors import ApiError
 from store import assert_unique_name, load_state, product_index, update_state
 from validation import validate_product
@@ -72,6 +73,11 @@ class Handler(BaseHTTPRequestHandler):
                     "data": {
                         "name": "REST practice API",
                         "base_url": f"http://{HOST}:{PORT}",
+                        "tokens": {
+                            "student": STUDENT_TOKEN,
+                            "mentor": MENTOR_TOKEN,
+                        },
+                        "auth_header": "Authorization: Bearer <token>",
                         "endpoints": [
                             "GET /health",
                             "GET /products",
@@ -148,21 +154,26 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(200, {"data": state["items"][index]})
 
     def create_product(self) -> None:
+        require_user(self.headers.get("Authorization", ""))
         fields = validate_product(self.read_json_object(), partial=False)
         created = update_state(lambda state: self.insert_product(state, fields))
         self.respond(201, {"data": created}, {"Location": f"{self.base_url()}/products/{created['id']}"})
 
     def replace_product(self, product_id: int) -> None:
+        require_user(self.headers.get("Authorization", ""))
         fields = validate_product(self.read_json_object(), partial=False)
         product = update_state(lambda state: self.write_product(state, product_id, fields, partial=False))
         self.respond(200, {"data": product})
 
     def update_product(self, product_id: int) -> None:
+        require_user(self.headers.get("Authorization", ""))
         fields = validate_product(self.read_json_object(), partial=True)
         product = update_state(lambda state: self.write_product(state, product_id, fields, partial=True))
         self.respond(200, {"data": product})
 
     def delete_product(self, product_id: int) -> None:
+        require_user(self.headers.get("Authorization", ""), role="mentor")
+
         def mutate(state: dict) -> None:
             index = product_index(state, product_id)
             if index is None:
